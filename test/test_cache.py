@@ -8,6 +8,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
+from types import SimpleNamespace
 from unittest.mock import ANY, mock_open, patch
 
 import pytest
@@ -569,6 +570,41 @@ class TestSharedCache:
         # assert
         assert loaded_model == model_json
         mock_download_blob.assert_called_once()
+
+    @patch("olive.cache.AzureContainerClientFactory.download_blob")
+    def test_download_blob_list_keeps_files_inside_output_dir(self, mock_download_blob, tmp_path):
+        prefix = "model_id/model/model"
+        blobs = [SimpleNamespace(name=f"{prefix}/model.onnx"), SimpleNamespace(name=f"{prefix}/sub/weights.bin")]
+
+        self.shared_cache._download_blob_list(blobs, prefix, tmp_path, "adapter")
+
+        assert [c.args[1] for c in mock_download_blob.call_args_list] == [
+            tmp_path / "adapter" / "model.onnx",
+            tmp_path / "adapter" / "sub" / "weights.bin",
+        ]
+
+    @pytest.mark.parametrize(
+        "relative_name",
+        ["../escape.txt", "sub/../../escape.txt", "../../../../tmp/escape.txt", "/tmp/escape.txt", ""],
+    )
+    @patch("olive.cache.AzureContainerClientFactory.download_blob")
+    def test_download_blob_list_rejects_names_outside_output_dir(self, mock_download_blob, relative_name, tmp_path):
+        prefix = "model_id/model/model"
+        blobs = [SimpleNamespace(name=f"{prefix}/{relative_name}")]
+
+        with pytest.raises(ValueError, match="Refusing to download shared cache blob"):
+            self.shared_cache._download_blob_list(blobs, prefix, tmp_path / "model")
+
+        mock_download_blob.assert_not_called()
+
+    @patch("olive.cache.AzureContainerClientFactory.download_blob")
+    def test_download_blob_list_rejects_blob_outside_prefix(self, mock_download_blob, tmp_path):
+        prefix = "model_id/model/model"
+        blobs = [SimpleNamespace(name="other_model/model/model/model.onnx")]
+
+        with pytest.raises(ValueError, match="Refusing to download shared cache blob"):
+            self.shared_cache._download_blob_list(blobs, prefix, tmp_path)
+        mock_download_blob.assert_not_called()
 
     @pytest.mark.parametrize("expected_exists", [True, False])
     @patch("olive.cache.AzureContainerClientFactory.exists")

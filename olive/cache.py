@@ -979,11 +979,27 @@ class SharedCache:
     def _download_blob_list(
         self, blob_list, directory_prefix: str, output_model_path: Path, prefix: Optional[str] = None
     ) -> None:
+        target_dir = output_model_path / prefix if prefix else output_model_path
         for blob in blob_list:
-            local_file_path = (
-                output_model_path / prefix / blob.name[len(directory_prefix) + 1 :]
-                if prefix
-                else output_model_path / blob.name[len(directory_prefix) + 1 :]
-            )
+            local_file_path = self._blob_local_path(blob.name, directory_prefix, target_dir)
             logger.info("Downloading %s to %s", blob.name, local_file_path)
             self.container_client_factory.download_blob(blob, local_file_path)
+
+    @staticmethod
+    def _blob_local_path(blob_name: str, directory_prefix: str, target_dir: Path) -> Path:
+        """Map a shared-cache blob name to a local path inside target_dir.
+
+        Blob names come from the shared container, not from this machine. A name with ".." segments or an absolute
+        path after the prefix would otherwise be written outside target_dir, so such names are rejected.
+        """
+        relative_name = blob_name[len(directory_prefix) + 1 :]
+        local_file_path = target_dir / relative_name
+        if (
+            not blob_name.startswith(f"{directory_prefix}/")
+            or not relative_name
+            or not local_file_path.resolve().is_relative_to(target_dir.resolve())
+        ):
+            raise ValueError(
+                f"Refusing to download shared cache blob {blob_name!r}: it does not map to a path inside {target_dir}."
+            )
+        return local_file_path
